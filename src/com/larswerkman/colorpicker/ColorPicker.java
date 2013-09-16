@@ -19,12 +19,16 @@ package com.larswerkman.colorpicker;
 import android.content.Context;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.SweepGradient;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Parcelable;
 import android.util.AttributeSet;
@@ -57,7 +61,17 @@ public class ColorPicker extends View {
 	 * you change this array.
 	 * </p>
 	 */
-	private static final int[] COLORS = new int[] { 0xFFFF0000, 0xFFFF00FF,
+	private static final int[] COLORS_BLACK_AND_WHITE = new int[] {
+//            0xFF000000, 0xFF8c8c8c,
+//            0xFF8c8c8c, 0xFFFFFFFF,
+//            0xFFFFFFFF, 0xFF8c8c8c,
+//            0xFF8c8c8c, 0xFF000000,
+            0xFF000000, 0xFFFFFFFF, 0xFF000000
+    };
+
+    private int[] COLORS;
+
+    private static final int[] COLORS_FULL = new int[] { 0xFFFF0000, 0xFFFF00FF,
 			0xFF0000FF, 0xFF00FFFF, 0xFF00FF00, 0xFFFFFF00, 0xFFFF0000 };
 
 	/**
@@ -118,6 +132,11 @@ public class ColorPicker extends View {
 	 */
 	private RectF mCenterRectangle = new RectF();
 
+    /**
+     * Once bitmap set this will represent its size
+     */
+    private Rect mBitmapRectangle = new Rect();
+
 	/**
 	 * {@code true} if the user clicked on the pointer to start the move mode. <br>
 	 * {@code false} once the user stops touching the screen.
@@ -176,6 +195,8 @@ public class ColorPicker extends View {
 	 */
 	private Paint mCenterNewPaint;
 
+    private Paint mCenterBitmapPaint;
+
 	/**
 	 * {@code Paint} instance used to draw the halo of the center selected
 	 * colors.
@@ -208,6 +229,24 @@ public class ColorPicker extends View {
 	 */
 	private ValueBar mValueBar = null;
 
+    private boolean mOnCenterClickRevertsToOldColor = true;
+
+    private boolean mCenterOnlyDisplaysCurrentColor = false;
+
+    private boolean mOnCenterClicked = false;
+
+    /**
+     * Could be a tick etc
+     */
+    private Bitmap mCenterBitmap;
+
+    /**
+     * By default the bitmap will take all the space of center holo unless scale provided
+     */
+    private float mCenterBitmapScale = 1f;
+
+    private boolean mBlackAndWhiteColorScheme = false;
+
 	/**
 	 * {@code onColorChangedListener} instance of the onColorChangedListener
 	 */
@@ -228,6 +267,32 @@ public class ColorPicker extends View {
 		init(attrs, defStyle);
 	}
 
+    public void setCenterDrawableResource(int resourceId){
+        Drawable drawable = getContext().getResources().getDrawable(resourceId);
+        if(drawable == null || !(drawable instanceof BitmapDrawable)){
+            throw new RuntimeException("Resource id is invalid or resource is not instance or BitmapDrawable");
+        }
+        setCenterBitmapDrawable((BitmapDrawable) drawable);
+    }
+
+    public void setCenterBitmapDrawable(BitmapDrawable drawable){
+        if(drawable == null){
+            mCenterBitmap = null;
+        } else {
+            setCenterBitmap(drawable.getBitmap());
+        }
+    }
+
+    public void setCenterBitmap(Bitmap bitmap){
+        mCenterBitmap = bitmap;
+        invalidate();
+    }
+
+    public void setBlackAndWhiteMode(boolean blackAndWhiteMode){
+        mBlackAndWhiteColorScheme = blackAndWhiteMode;
+        initColors();
+    }
+
 	/**
 	 * An interface that is called whenever the color is changed. Currently it
 	 * is always called when the color is changes.
@@ -237,6 +302,8 @@ public class ColorPicker extends View {
 	 */
 	public interface OnColorChangedListener {
 		public void onColorChanged(int color);
+
+        public void onUserClickedOnCenter(int oldColor, int newColor);
 	}
 
 	/**
@@ -286,35 +353,51 @@ public class ColorPicker extends View {
 
 		a.recycle();
 
-		mAngle = (float) (-Math.PI / 2);
-
-		Shader s = new SweepGradient(0, 0, COLORS, null);
-
-		mColorWheelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		mColorWheelPaint.setShader(s);
-		mColorWheelPaint.setStyle(Paint.Style.STROKE);
-		mColorWheelPaint.setStrokeWidth(mColorWheelThickness);
-
-		mPointerHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		mPointerHaloPaint.setColor(Color.BLACK);
-		mPointerHaloPaint.setAlpha(0x50);
-
-		mPointerColor = new Paint(Paint.ANTI_ALIAS_FLAG);
-		mPointerColor.setColor(calculateColor(mAngle));
-
-		mCenterNewPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		mCenterNewPaint.setColor(calculateColor(mAngle));
-		mCenterNewPaint.setStyle(Paint.Style.FILL);
-
-		mCenterOldPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		mCenterOldPaint.setColor(calculateColor(mAngle));
-		mCenterOldPaint.setStyle(Paint.Style.FILL);
-
-		mCenterHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-		mCenterHaloPaint.setColor(Color.BLACK);
-		mCenterHaloPaint.setAlpha(0x00);
-
+        initColors();
 	}
+
+    private void initColors(){
+        mAngle = (float) (-Math.PI / 2);
+
+        if(mBlackAndWhiteColorScheme){
+            COLORS = COLORS_BLACK_AND_WHITE;
+        } else {
+            COLORS = COLORS_FULL;
+        }
+
+        Shader s = new SweepGradient(0, 0, COLORS, null);
+
+        mColorWheelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mColorWheelPaint.setShader(s);
+        mColorWheelPaint.setStyle(Paint.Style.STROKE);
+        mColorWheelPaint.setStrokeWidth(mColorWheelThickness);
+
+        mPointerHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mPointerHaloPaint.setColor(Color.BLACK);
+        mPointerHaloPaint.setAlpha(0x50);
+
+        mPointerColor = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mPointerColor.setColor(calculateColor(mAngle));
+
+        mCenterNewPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mCenterNewPaint.setColor(calculateColor(mAngle));
+        mCenterNewPaint.setStyle(Paint.Style.FILL);
+
+        mCenterOldPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mCenterOldPaint.setColor(calculateColor(mAngle));
+        mCenterOldPaint.setStyle(Paint.Style.FILL);
+
+        mCenterHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        mCenterHaloPaint.setColor(Color.BLACK);
+        mCenterHaloPaint.setAlpha(0x00);
+
+        mCenterBitmapPaint = new Paint();
+        mCenterBitmapPaint.setAntiAlias(true);
+        mCenterBitmapPaint.setFilterBitmap(true);
+        mCenterBitmapPaint.setDither(true);
+        mCenterBitmapPaint.setColor(Color.BLACK);
+        mCenterBitmapPaint.setStyle(Paint.Style.FILL);
+    }
 
 	@Override
 	protected void onDraw(Canvas canvas) {
@@ -345,6 +428,10 @@ public class ColorPicker extends View {
 
 		// Draw the new selected color in the center.
 		canvas.drawArc(mCenterRectangle, 270, 180, true, mCenterNewPaint);
+
+        if(mCenterBitmap != null){
+            canvas.drawBitmap(mCenterBitmap, null, mBitmapRectangle, mCenterBitmapPaint);
+        }
 	}
 
 	@Override
@@ -388,6 +475,15 @@ public class ColorPicker extends View {
 		mColorCenterHaloRadius = (int) ((float) mPreferredColorCenterHaloRadius * ((float) mColorWheelRadius / (float) mPreferredColorWheelRadius));
 		mCenterRectangle.set(-mColorCenterRadius, -mColorCenterRadius,
 				mColorCenterRadius, mColorCenterRadius);
+
+        // smaller bitmap rectangle based on scale
+        int dw = (int) (mCenterRectangle.width() * mCenterBitmapScale);
+        int dh = (int) (mCenterRectangle.height() * mCenterBitmapScale);
+        int l = (int) mCenterRectangle.left + dw / 2;
+        int t = (int) mCenterRectangle.top + dh / 2;
+        int r = (int) mCenterRectangle.right - dw / 2;
+        int b = (int) mCenterRectangle.bottom - dh / 2;
+        mBitmapRectangle.set(l, t, r, b);
 	}
 
 	private int ave(int s, int d, float p) {
@@ -511,11 +607,15 @@ public class ColorPicker extends View {
 	private float colorToAngle(int color) {
 		float[] colors = new float[3];
 		Color.colorToHSV(color, colors);
-		
-		return (float) Math.toRadians(-colors[0]);
+        if(mBlackAndWhiteColorScheme){
+            float degrees = 180 * colors[2];
+            return (float) Math.toRadians(degrees);
+        } else {
+		    return (float) Math.toRadians(-colors[0]);
+        }
 	}
-	
-	@Override
+
+    @Override
 	public boolean onTouchEvent(MotionEvent event) {
 		getParent().requestDisallowInterceptTouchEvent(true);
 
@@ -525,6 +625,7 @@ public class ColorPicker extends View {
 
 		switch (event.getAction()) {
 		case MotionEvent.ACTION_DOWN:
+            mOnCenterClicked = false;
 			// Check whether the user pressed on the pointer.
 			float[] pointerPosition = calculatePointerPosition(mAngle);
 			if (x >= (pointerPosition[0] - mColorPointerHaloRadius)
@@ -538,8 +639,11 @@ public class ColorPicker extends View {
 			else if (x >= -mColorCenterRadius && x <= mColorCenterRadius
 					&& y >= -mColorCenterRadius && y <= mColorCenterRadius) {
 				mCenterHaloPaint.setAlpha(0x50);
-				setColor(getOldCenterColor());
-				mCenterNewPaint.setColor(getOldCenterColor());
+                if(mOnCenterClickRevertsToOldColor){
+                    setColor(getOldCenterColor());
+                    mCenterNewPaint.setColor(getOldCenterColor());
+                }
+                mOnCenterClicked = true;
 				invalidate();
 			}
 			// If user did not press pointer or center, report event not handled
@@ -554,6 +658,9 @@ public class ColorPicker extends View {
 				mPointerColor.setColor(calculateColor(mAngle));
 
 				setNewCenterColor(mCenterNewColor = calculateColor(mAngle));
+                if(mCenterOnlyDisplaysCurrentColor){
+                    setOldCenterColor(mCenterNewColor);
+                }
 
 				if (mOpacityBar != null) {
 					mOpacityBar.setColor(mColor);
@@ -582,6 +689,9 @@ public class ColorPicker extends View {
 		case MotionEvent.ACTION_UP:
 			mUserIsMovingPointer = false;
 			mCenterHaloPaint.setAlpha(0x00);
+            if(mOnCenterClicked && onColorChangedListener != null){
+                onColorChangedListener.onUserClickedOnCenter(mCenterOldColor, mCenterNewColor);
+            }
 			invalidate();
 			break;
 		}
@@ -653,7 +763,7 @@ public class ColorPicker extends View {
 	public void setNewCenterColor(int color) {
 		mCenterNewColor = color;
 		mCenterNewPaint.setColor(color);
-		if (mCenterOldColor == 0) {
+		if (mCenterOnlyDisplaysCurrentColor || mCenterOldColor == 0) {
 			mCenterOldColor = color;
 			mCenterOldPaint.setColor(color);
 		}
@@ -715,6 +825,31 @@ public class ColorPicker extends View {
 			mValueBar.setColor(color);
 		}
 	}
+
+    /**
+     * By default when center is clicked it reverts to old color
+     * @param centerRevertsToOldColor
+     */
+    public void setCenterButtonRevertsToOldColor(boolean centerRevertsToOldColor){
+        mOnCenterClickRevertsToOldColor = centerRevertsToOldColor;
+    }
+
+    /**
+     * By default center shows 2 colors, current and old, this set to true will only show current
+     * @param showOnlyCurrentColor
+     */
+    public void setCenterDisplaysOnlyCurrentColor(boolean showOnlyCurrentColor){
+        mCenterOnlyDisplaysCurrentColor = showOnlyCurrentColor;
+    }
+
+    /**
+     * By default bitmap is placed into holo circle if needed you can scale it down
+     * @param scale
+     */
+    public void setCenterBitmapScale(float scale){
+        mCenterBitmapScale = scale;
+        forceLayout();
+    }
 
 	@Override
 	protected Parcelable onSaveInstanceState() {
